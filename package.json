@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "prebuild": "mkdir -p dist && rm -rf dist/*",
+    "build": "babel src | esbuild --bundle > dist/index.js && cp {src,dist}/ExtendedAutoTag.yml"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.22.15",
+    "@babel/core": "^7.22.17",
+    "@babel/preset-env": "^7.22.15",
+    "core-js": "^3.32.2",
+    "esbuild": "^0.19.2"
+  }
+}

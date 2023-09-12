@@ -1,102 +1,93 @@
-(() => {
-    // Get list of tags
-    const tags = gql.Do(`{
-        findTags(tag_filter: {
-            ignore_auto_tag: false
-        }, filter: {
-            per_page: -1
-        }) {
-            tags { 
-                id 
-                name 
-                aliases 
-            }
-        }
-    }`)
+const PRE_REGEX="(^|_|[^\p{L}\d])"
+const JOIN_REGEX="[.\-_ ]*"
+const POST_REGEX="($|_|[^\p{L}\d])"
 
-    const tagAliases = []
-    tags['findTags']['tags'].forEach(tag => {
-       tag['aliases'].concat(tag['name']).forEach(str => {
-           tagAliases.push({
-               id: tag['id'],
-               name: tag['name'],
-               value: str 
-           })
-        })
-    })
-
-    log.Info(`Extended Auto Tagger searching for ${tagAliases.length} tags including aliases`)
-
-    tagAliases.forEach((tagAlias, index) => {
-        // Search for string
-
-        // Build regex for matching
-        preRegex="(^|_|[^\p{L}\d])"
-        joinRegex="[.\-_ ]*"
-        postRegex="($|_|[^\p{L}\d])"
-        matchingScenes = gql.Do(`
-            query FindScenes($str: String!, $tagId: ID!) {
-                findScenes(filter: {
-                    per_page: -1
-                } scene_filter: {
-                    tags: {
-                        excludes: [$tagId], modifier: INCLUDES_ALL
-                    }, AND: {
-                        details: {
-                            value: $str, modifier: MATCHES_REGEX
-                        }, OR: {
-                            title: {
-                                value: $str, modifier: MATCHES_REGEX
-                            }, OR: {
-                                path: {
+const FIND_SCENES = `query FindScenes($str: String!, $tagId: ID!) {
+                        findScenes(filter: {
+                            per_page: -1
+                        } scene_filter: {
+                            tags: {
+                                excludes: [$tagId], modifier: INCLUDES_ALL
+                            }, AND: {
+                                details: {
                                     value: $str, modifier: MATCHES_REGEX
+                                }, OR: {
+                                    title: {
+                                        value: $str, modifier: MATCHES_REGEX
+                                    }
                                 }
                             }
+                        }) {
+                            scenes { id }
                         }
-                    }
-                }) {
-                    scenes { id }
-                }
-            }`,
-            { 
-                "tagId": tagAlias.id,
-                "str": preRegex + tagAlias.value.replaceAll(' ', joinRegex) + postRegex
-            }
-        )
+                    }`
 
-        let tagToken = tagAlias.name
-        if(tagAlias.name != tagAlias.value) {
-            tagToken += ' via alias ' + tagAlias.value
+const FIND_TAGS = `{
+    findTags(tag_filter: {
+        ignore_auto_tag: false
+    }, filter: {
+        per_page: -1
+    }) {
+        tags { 
+            id 
+            name 
+            aliases 
+        }
+    }
+}`
+
+const BULK_SCENE_UPDATE = `mutation BulkSceneUpdate($sceneIds: [ID!], $tagId: ID!) {
+                              bulkSceneUpdate(input: {
+                                  ids: $sceneIds,
+                                  tag_ids: {
+                                      ids: [$tagId],
+                                      mode: ADD
+                                  }
+                              }) { id }
+                          }`
+
+function tagToRegex(tag) {
+    return '(?i)' + tag.aliases.map(alias => {
+        return PRE_REGEX + alias.replaceAll(' ', JOIN_REGEX) + POST_REGEX
+    }).join('|')
+}
+
+(() => {
+    // Get list of tags
+    const tags = gql.Do(FIND_TAGS)['findTags']['tags'].map(tag => {
+        return {
+            id: tag['id'],
+            name: tag['name'],
+            aliases: tag['aliases'].concat(tag['name'])
+        }
+    })
+
+    log.Info(`Extended Auto Tagger searching for ${tags.length} tags.`)
+
+    tags.forEach((tag, index) => {
+        log.Progress(index/tags.length)
+
+        const findScenesVariables = { 
+            "tagId": tag.id,
+            "str": tagToRegex(tag)
         }
 
-        // Update the progress
-        log.Progress(index/tagAliases.length)
+        log.Trace('FIND_SCENES variables' + JSON.stringify(findScenesVariables))
 
-        // Return early if there are no scenes to tag.
+        const matchingScenes = gql.Do(FIND_SCENES, findScenesVariables)
+
         if(matchingScenes['findScenes']['scenes'].length == 0) {
-            log.Debug(`No additional scenes found for ${tagToken}`)
+            log.Debug(`No additional scenes found for ${tag.name}`)
             return
         }
 
-        mutation = `mutation BulkSceneUpdate($sceneIds: [ID!], $tagId: ID!) {
-            bulkSceneUpdate(input: {
-                ids: $sceneIds,
-                tag_ids: {
-                    ids: [$tagId],
-                    mode: ADD
-                }
-            }) { id }
-        }`
-        variables = {
-            "tagId": tagAlias.id,
+        results = gql.Do(BULK_SCENE_UPDATE, {
+            "tagId": tag.id,
             "sceneIds": matchingScenes['findScenes']['scenes'].map(scene => scene['id'])
-        }
-
-        // Update matching scenes with tag id.
-        results = gql.Do(mutation, variables)
+        })
 
         if(results['bulkSceneUpdate'].length > 0) {
-            log.Info(`Added ${tagToken} to ${results['bulkSceneUpdate'].length} scenes.`)
+            log.Info(`Added ${tag.name} to ${results['bulkSceneUpdate'].length} scenes.`)
         } else {
             log.Error('Expected to add tags, but none were added.')
         }

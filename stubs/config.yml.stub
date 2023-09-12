@@ -1,0 +1,13 @@
+name: Extended Auto Tag
+description: |
+  Extend built-in Auto Tag to check scene title and details.
+
+  - Respects +ignore auto tag+ setting on tags. 
+  - Follows a similar set of matching rules as the built-in auto tagger.
+version: VERSION
+exec:
+  - main.js
+interface: js
+tasks:
+  - name: Extended Auto Tag
+    description: Search library with tag names & aliases for scenes with matching title or details and tag them.
